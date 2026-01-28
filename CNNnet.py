@@ -8,19 +8,67 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(
+            in_planes,
+            planes,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(
+            planes,
+            planes,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(
+                    in_planes,
+                    planes,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(planes),
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
 class AtomRearrangementNet(nn.Module):
     def __init__(self, M):
         super(AtomRearrangementNet, self).__init__()
-        
-        # 接下来写AlexNet CNN部分
-        
+        self.in_planes = 64
 
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)  # 输入通道1，输出通道32，3x3卷积核
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)  # 输入通道32，输出通道64，3x3卷积核
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)  # 输入通道64，输出通道128，3x3卷积核
-        
+        # ResNet18 风格的 CNN 部分（适配小尺寸输入）
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.layer1 = self._make_layer(64, 2, stride=1)
+        self.layer2 = self._make_layer(128, 2, stride=2)
+        self.layer3 = self._make_layer(256, 2, stride=2)
+        self.layer4 = self._make_layer(512, 2, stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
         # 计算CNN输出的flatten后的维度
-        self.flatten_size = 128 * M * M  # 最后一个卷积层的输出通道数 * 输入矩阵的大小
+        self.flatten_size = 512  # ResNet18 最后输出通道数
         
         # 全连接层部分
         # 预测方向d（2个类别）
@@ -35,16 +83,27 @@ class AtomRearrangementNet(nn.Module):
         self.fc_Py1 = nn.Linear(self.flatten_size, M)  # P_y1 是一个长度为M的one-hot编码
         self.fc_Py2 = nn.Linear(self.flatten_size, M)  # P_y2 是一个长度为M的one-hot编码
 
+    def _make_layer(self, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(BasicBlock(self.in_planes, planes, stride))
+            self.in_planes = planes * BasicBlock.expansion
+        return nn.Sequential(*layers)
+
     def forward(self, x):
         if x.dim() == 3:
             x = x.unsqueeze(1)  # 添加通道维度
         # 输入x的维度是 (batch_size, 1, M, M)，即每个样本是一个M x M的矩阵
-        x = F.relu(self.conv1(x))  # 卷积层1，ReLU激活
-        x = F.relu(self.conv2(x))  # 卷积层2，ReLU激活
-        x = F.relu(self.conv3(x))  # 卷积层3，ReLU激活
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
         
         # 将特征图展平（flatten）
-        x = x.view(x.size(0), -1)  # (batch_size, 128 * M * M)
+        x = x.view(x.size(0), -1)  # (batch_size, 512)
         
         # 预测方向d
         d = self.fc_d(x)  # 输出方向d的one-hot编码概率
