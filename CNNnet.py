@@ -70,18 +70,22 @@ class AtomRearrangementNet(nn.Module):
         # 计算CNN输出的flatten后的维度
         self.flatten_size = 512  # ResNet18 最后输出通道数
         
-        # 全连接层部分
-        # 预测方向d（2个类别）
-        self.fc_d = nn.Linear(self.flatten_size, 2)
-        
-        # 预测n_x（选择的行/列个数）和P_x（选择的行/列的概率分布）
-        self.fc_nx = nn.Linear(self.flatten_size, M)  # n_x 是一个长度为M的one-hot编码
-        self.fc_Px = nn.Linear(self.flatten_size, M)  # P_x 是一个长度为M的one-hot编码
-        
-        # 预测n_y（移动维度选择的个数）和P_y1/P_y2（移动维度的起始点和终点概率）
-        self.fc_ny = nn.Linear(self.flatten_size, M)  # n_y 是一个长度为M的one-hot编码
-        self.fc_Py1 = nn.Linear(self.flatten_size, M)  # P_y1 是一个长度为M的one-hot编码
-        self.fc_Py2 = nn.Linear(self.flatten_size, M)  # P_y2 是一个长度为M的one-hot编码
+        # 顺序解码的多层全连接头
+        hidden = (256, 128)
+        self.head_d = MLP(self.flatten_size, hidden, 2)
+        self.head_nx = MLP(self.flatten_size + 2, hidden, M)
+        self.head_Px = MLP(self.flatten_size + 2 + M, hidden, M)
+        self.head_ny = MLP(self.flatten_size + 2 + M + M, hidden, M)
+        self.head_Py1 = MLP(self.flatten_size + 2 + M + M + M, hidden, M)
+        self.head_Py2 = MLP(self.flatten_size + 2 + M + M + M + M, hidden, M)
+
+    def _make_layer(self, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(BasicBlock(self.in_planes, planes, stride))
+            self.in_planes = planes * BasicBlock.expansion
+        return nn.Sequential(*layers)
 
     def _make_layer(self, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -106,17 +110,17 @@ class AtomRearrangementNet(nn.Module):
         x = x.view(x.size(0), -1)  # (batch_size, 512)
         
         # 预测方向d
-        d = self.fc_d(x)  # 输出方向d的one-hot编码概率
+        d = self.head_d(x)  # 输出方向d的one-hot编码概率
         d = F.softmax(d, dim=1)  # 使用Softmax获得概率分布
         
         # 预测n_x（选择的行/列个数）和P_x（选择的行/列的概率分布）
-        n_x = self.fc_nx(x)  # 输出选择的行/列个数（one-hot）
-        P_x = self.fc_Px(x)  # 输出选择的行/列概率
+        n_x = self.head_nx(torch.cat([x, d], dim=1))  # 输出选择的行/列个数（one-hot）
+        P_x = self.head_Px(torch.cat([x, d, n_x], dim=1))  # 输出选择的行/列概率
         
         # 预测n_y（移动维度的选择个数）和P_y1/P_y2（移动维度的起始点和终点概率）
-        n_y = self.fc_ny(x)  # 输出选择的移动维度个数（one-hot）
-        P_y1 = self.fc_Py1(x)  # 输出移动维度起始点概率
-        P_y2 = self.fc_Py2(x)  # 输出移动维度终点点概率
+        n_y = self.head_ny(torch.cat([x, d, n_x, P_x], dim=1))  # 输出选择的移动维度个数（one-hot）
+        P_y1 = self.head_Py1(torch.cat([x, d, n_x, P_x, n_y], dim=1))  # 输出移动维度起始点概率
+        P_y2 = self.head_Py2(torch.cat([x, d, n_x, P_x, n_y, P_y1], dim=1))  # 输出移动维度终点点概率
         
         # # 使用Softmax将所有概率转化为分布
         # n_x = F.softmax(n_x, dim=1)
