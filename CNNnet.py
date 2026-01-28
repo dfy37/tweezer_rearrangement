@@ -53,6 +53,20 @@ class BasicBlock(nn.Module):
         return out
 
 
+class MLP(nn.Module):
+    def __init__(self, in_features, hidden_features, out_features):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_features, hidden_features[0]),
+            nn.ReLU(),
+            nn.Linear(hidden_features[0], hidden_features[1]),
+            nn.ReLU(),
+            nn.Linear(hidden_features[1], out_features),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 class AtomRearrangementNet(nn.Module):
     def __init__(self, M):
         super(AtomRearrangementNet, self).__init__()
@@ -78,14 +92,6 @@ class AtomRearrangementNet(nn.Module):
         self.head_ny = MLP(self.flatten_size + 2 + M + M, hidden, M)
         self.head_Py1 = MLP(self.flatten_size + 2 + M + M + M, hidden, M)
         self.head_Py2 = MLP(self.flatten_size + 2 + M + M + M + M, hidden, M)
-
-    def _make_layer(self, planes, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(BasicBlock(self.in_planes, planes, stride))
-            self.in_planes = planes * BasicBlock.expansion
-        return nn.Sequential(*layers)
 
     def _make_layer(self, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -121,13 +127,6 @@ class AtomRearrangementNet(nn.Module):
         n_y = self.head_ny(torch.cat([x, d, n_x, P_x], dim=1))  # 输出选择的移动维度个数（one-hot）
         P_y1 = self.head_Py1(torch.cat([x, d, n_x, P_x, n_y], dim=1))  # 输出移动维度起始点概率
         P_y2 = self.head_Py2(torch.cat([x, d, n_x, P_x, n_y, P_y1], dim=1))  # 输出移动维度终点点概率
-        
-        # # 使用Softmax将所有概率转化为分布
-        # n_x = F.softmax(n_x, dim=1)
-        # P_x = F.softmax(P_x, dim=1)
-        # n_y = F.softmax(n_y, dim=1)
-        # P_y1 = F.softmax(P_y1, dim=1)
-        # P_y2 = F.softmax(P_y2, dim=1)
 
         return d, n_x, P_x, n_y, P_y1, P_y2
 
@@ -169,7 +168,6 @@ def train(model, train_loader, optimizer, epochs=10):
 
             # 前向传播
             d, n_x, P_x, n_y, P_y1, P_y2 = model(inputs)
-            # print(targets['P_x'])
 
             # 计算损失
             loss_d = criterion_d(d, targets['d'])
@@ -193,8 +191,10 @@ def train(model, train_loader, optimizer, epochs=10):
             if i % 100 == 99:  # 每100个batch输出一次
                 print(f"Epoch [{epoch+1}/{epochs}], Step [{i+1}/{len(train_loader)}], Loss: {running_loss/100:.4f}")
                 print(loss_d.item(), loss_nx.item(), loss_Px.item(), loss_ny.item(), loss_Py1.item(), loss_Py2.item())
-                print('P_y1', P_y1)
-                print('target P_y1', targets['P_y1'])
+                print(n_x)
+                print(targets['n_x'])
+                # print('P_y1', P_y1)
+                # print('target P_y1', targets['P_y1'])
                 running_loss = 0.0
 
 def validate(model, val_loader):
