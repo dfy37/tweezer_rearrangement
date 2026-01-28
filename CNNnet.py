@@ -53,21 +53,6 @@ class BasicBlock(nn.Module):
         return out
 
 
-class MLP(nn.Module):
-    def __init__(self, in_features, hidden_features, out_features):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_features, hidden_features[0]),
-            nn.ReLU(),
-            nn.Linear(hidden_features[0], hidden_features[1]),
-            nn.ReLU(),
-            nn.Linear(hidden_features[1], out_features),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-
 class AtomRearrangementNet(nn.Module):
     def __init__(self, M):
         super(AtomRearrangementNet, self).__init__()
@@ -93,6 +78,14 @@ class AtomRearrangementNet(nn.Module):
         self.head_ny = MLP(self.flatten_size + 2 + M + M, hidden, M)
         self.head_Py1 = MLP(self.flatten_size + 2 + M + M + M, hidden, M)
         self.head_Py2 = MLP(self.flatten_size + 2 + M + M + M + M, hidden, M)
+
+    def _make_layer(self, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(BasicBlock(self.in_planes, planes, stride))
+            self.in_planes = planes * BasicBlock.expansion
+        return nn.Sequential(*layers)
 
     def _make_layer(self, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
